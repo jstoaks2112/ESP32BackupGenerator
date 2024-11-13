@@ -37,13 +37,6 @@ wifi:
     ssid: "Backup-Generator-Control"
     password: "0dIFGp6lURPB"
 
-#mqtt:
-#  broker: ha.stoaks.net
-#  port: 1883
-#  username: homeassistant
-#  password: utaeG5ies9Oophohca8feenoo2ohPh0cailaefuChei8IuM6dus6OoDahcie1fir
-#  topic_prefix: homeassistant/sensors/generator/backup_generator_controller
-# Example configuration entry
 web_server:
   port: 80
   version: 3
