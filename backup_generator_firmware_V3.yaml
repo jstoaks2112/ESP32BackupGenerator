@@ -26,16 +26,16 @@ logger:
 # Enable Home Assistant API
 api:
   encryption:
-    key: "qaUatjl68bvlKiX82j26ZeDezhS87UObRECPX/T7Dvk="
+    key: "your_key"
 ota:
   - platform: esphome
-    password: "c27481e9f396fcab9773cb3a6e3f0a76"
+    password: "your_key"
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   ap:
     ssid: "Backup-Generator-Control"
-    password: "0dIFGp6lURPB"
+    password: "your_password"
 
 web_server:
   port: 80
