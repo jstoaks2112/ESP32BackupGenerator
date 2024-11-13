@@ -1,0 +1,452 @@
+esphome:
+  name: backup-generator-control
+  friendly_name: Backup Generator Control
+  
+  on_boot:
+    priority: -10
+    then:
+      - lambda: |-
+          // Retrieve stored runtime data from flash
+          ESPPreferenceObject pref = global_preferences->make_preference<int>(1);
+          int saved_runtime = 0;
+          pref.load(&saved_runtime);
+          id(engine_runtime_seconds) = saved_runtime;
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+# Example configuration entry
+#debug:
+#  update_interval: 5s
+logger:
+  level: debug
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "qaUatjl68bvlKiX82j26ZeDezhS87UObRECPX/T7Dvk="
+ota:
+  - platform: esphome
+    password: "c27481e9f396fcab9773cb3a6e3f0a76"
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Backup-Generator-Control"
+    password: "0dIFGp6lURPB"
+
+#mqtt:
+#  broker: ha.stoaks.net
+#  port: 1883
+#  username: homeassistant
+#  password: utaeG5ies9Oophohca8feenoo2ohPh0cailaefuChei8IuM6dus6OoDahcie1fir
+#  topic_prefix: homeassistant/sensors/generator/backup_generator_controller
+# Example configuration entry
+web_server:
+  port: 80
+  version: 3
+  log: False
+
+
+globals:
+  - id: engine_running
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: start_attempts
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: target_rpm
+    type: int
+    restore_value: no
+    initial_value: "1700"  # Set your target RPM here
+  - id: target_rpm_high
+    type: int
+    restore_value: no
+    initial_value: "2100"
+  - id: max_start_attempts
+    type: int
+    restore_value: no
+    initial_value: "3"  # Maximum allowed start attempts
+  - id: start_blocked
+    type: bool
+    restore_value: no
+    initial_value: "false"  # To block further start attempts after reaching max
+  - id: start_in_progress
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: test_start_time
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: test_running
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: run_test_start_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+  - id: test_duration
+    type: int
+    restore_value: no
+    initial_value: '1800000'  # 30 minutes in milliseconds
+  - id: ac_status
+    type: bool
+    restore_value: no
+    initial_value: "true"
+  - id: engine_runtime_seconds
+    type: int
+    restore_value: yes
+    initial_value: "0"  # Start with 0 runtime if never set before
+
+
+# relay pin definitions
+switch:
+  - platform: gpio
+    pin: GPIO32
+    id: ac_transfer_relay1
+    name: "AC Circuit 1"
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    pin: GPIO33
+    id: ac_transfer_relay2
+    name: "AC Circuit 2"
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    pin: GPIO25
+    id: ac_transfer_relay3
+    name: "AC Circuit 3"
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    pin: GPIO13
+    id: starter_relay
+    name: "Engine Start"
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    pin: GPIO12
+    id: shutdown_relay
+    name: "Engine Shutoff"
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    pin: GPIO26
+    id: relay1
+    name: "Relay 1"
+  
+  - platform: gpio
+    pin: GPIO27
+    id: relay2
+    name: "Relay 2"
+  
+  - platform: gpio
+    pin: GPIO14
+    id: relay3
+    name: "Relay 3"
+
+  - platform: gpio
+    id: warning_led
+    pin: GPIO2
+    name: "Warning LED"
+    restore_mode: DISABLED
+
+# Scheduled automation to start Run Test every 7 days at 4 PM
+time:
+  - platform: sntp
+    id: current_time
+    on_time:
+      - days_of_week: MON
+        hours: 22
+        minutes: 10
+        then:
+          - if:
+              condition:
+                lambda: 'return !id(test_running);'
+              then:
+                - script.execute: run_test
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "EPO Switch Status"
+    id: generator_epo_status
+
+  - platform: gpio
+    pin:
+      number: GPIO22    # Adjust to your specific input pin
+      mode: INPUT_PULLUP
+    id: ac_monitor_input
+    name: "AC Monitor"
+    filters:
+      - delayed_on: 5s    # Trigger after 2 minutes if input is high
+      - delayed_off: 5s   # Trigger after 2 minutes if input is low
+#    internal: true
+
+text_sensor:
+  - platform: template
+    name: "Last Run Time"
+    id: last_run_time
+    icon: mdi:clock-outline
+
+  - platform: template
+    name: "AC Loss Time"
+    id: AC_power_loss_time
+    icon: mdi:clock-outline
+
+  - platform: template
+    name: "AC Restore Time"
+    id: ac_restore_time
+    icon: mdi:clock-outline
+
+  - platform: template
+    name: "Engine Total Runtime"
+    id: engine_runtime_text
+    icon: mdi:clock-outline
+    update_interval: never
+
+
+sensor:
+  - platform: adc
+    pin: GPIO34
+    name: "Gen Battery Vcc"
+    update_interval: 1s
+    id: generator_battery_vcc
+    device_class: voltage
+    attenuation: auto
+    filters:
+      - multiply: 5.4
+
+  - platform: template
+    name: "Start Attempts"
+    id: start_attempts_sensor
+    icon: mdi:counter
+
+  - platform: pulse_counter
+    pin:
+      number: GPIO4
+      inverted: false
+      mode:
+        input: true
+        pullup: true
+    id: rpm_sensor
+    name: "Engine RPM"
+    unit_of_measurement: "RPM"
+    accuracy_decimals: 0
+    update_interval: 500ms
+    filters:
+      # Convert pulse frequency to RPM
+      - lambda: return (x * 60) / 80;
+
+  # Custom filter to smooth values manually and round to integer
+      - lambda: |-
+          static float previous_rpm = 0.0;
+          const float alpha = 0.4;
+          float smoothed_rpm = (alpha * x) + ((1 - alpha) * previous_rpm);
+          previous_rpm = smoothed_rpm;
+          return static_cast<float>(static_cast<int>(smoothed_rpm + 0.5));
+          
+# Engine Start Routine
+script:
+  - id: engine_start
+    mode: queued
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(start_blocked);'
+          then:
+            # Increment start attempts counter
+            - lambda: |-
+                id(start_attempts) += 1;
+                ESP_LOGD("engine_start", "Attempt %d to start engine", id(start_attempts));
+                id(start_attempts_sensor).publish_state(id(start_attempts));
+            # Check if maximum start attempts have been exceeded
+            - if:
+                condition:
+                  lambda: 'return id(start_attempts) > id(max_start_attempts);'
+                then:
+                  - logger.log: "Max start attempts reached. Turning on warning LED."
+                  - switch.turn_on: warning_led  # Turn on warning LED
+                  - lambda: 'id(start_blocked) = true;'   # Block further starts
+
+            # Proceed only if start_blocked is still false after checking attempts
+            - if:
+                condition:
+                  lambda: 'return !id(start_blocked);'
+                then:
+                  # Start the engine by engaging the starter relay
+                  - switch.turn_on: starter_relay
+                  - lambda: 'id(start_in_progress) = true;'
+                  - logger.log: "Starter relay engaged. Waiting for engine to reach target RPM..."
+
+                  # Wait asynchronously for the RPM to reach the target
+                  - wait_until:
+                      condition:
+                        lambda: 'return (id(rpm_sensor).state >= id(target_rpm)) && (id(rpm_sensor).state <= id(target_rpm_high));'
+                      timeout: 10s
+                  # Disengage the starter relay
+                  - switch.turn_off: starter_relay
+                  - logger.log: "Turn off Starter Relay"
+                  - lambda: 'id(start_in_progress) = false;'
+                  # Check if engine started successfully
+                  - if:
+                      condition:
+                        lambda: 'return (id(rpm_sensor).state >= id(target_rpm)) && (id(rpm_sensor).state <= id(target_rpm_high));'
+                      then:
+                        - lambda: |-
+                            id(engine_running) = true;
+                            id(start_blocked) = false;
+#                            id(start_in_progress) = false;
+                        - logger.log: "Engine started successfully, RPM target reached."
+
+                      else:
+                        - logger.log: "Engine did not reach RPM target. Retrying after delay."
+                        - lambda: 'id(start_in_progress) = false;'
+                        - delay: 5s
+                        - logger.log: "restarting engine start script."
+                        - script.execute: engine_start  # Retry start
+
+# Engine Shutdown Routine
+  - id: engine_shutdown
+    mode: parallel  # Allows multiple shutdown events to be processed in parallel
+    then:
+      - switch.turn_on: shutdown_relay
+      - delay: 10s
+      - switch.turn_off: shutdown_relay
+      - lambda: |-
+          id(engine_running) = false;
+          id(start_attempts) = 0;
+          id(start_blocked) = false;
+          id(start_in_progress) = false;
+      - logger.log: "Engine has been shut down, engine shutdown script stopping."
+
+# Engine Run Test Script
+  - id: run_test
+    mode: parallel
+    then:
+      - logger.log: "running weekly test run now"
+      - lambda: |-
+
+          if (!id(test_running) && !id(engine_running)) {
+            id(test_start_time) = millis();
+            id(test_running) = true;
+            ESP_LOGD("run_test", "Starting test run...");
+            id(engine_running) = false;
+            id(start_blocked) = false;
+            id(engine_start).execute();
+          } else {
+
+            if (millis() - id(test_start_time) >= id(test_duration)) {
+              id(test_running) = false;
+              id(engine_running) = false;
+              ESP_LOGD("run_test", "Test completed, executing shutdown.");
+
+              char buffer[32];
+              snprintf(buffer, sizeof(buffer), "%ld", (long) id(current_time).now().timestamp);
+              id(last_run_time).publish_state(buffer);
+
+              id(engine_shutdown).execute(); 
+            }
+          }
+
+# Engine RPM Monitoring Routine
+interval:
+  - interval: 500ms
+    then:
+# Define the shutdown RPM threshold as half of the target RPM
+      - lambda: |-
+          const int shutdown_rpm_threshold = id(target_rpm) / 2;
+# Update engine running status based on RPM
+      - if:
+          condition:
+            lambda: 'return id(rpm_sensor).state >= id(target_rpm);'
+          then:
+            - lambda: 'id(engine_running) = true;'
+
+# If engine running, check if RPM drops below threshold and shut down
+      - if:
+          condition:
+            lambda: 'return id(start_in_progress);'
+          then:
+            - logger.log: "Skipping RPM check, start routine in progress."
+          else:
+            if:
+              condition:
+                lambda: 'return id(engine_running) && id(rpm_sensor).state < (id(target_rpm) / 2);'
+              then:
+                - logger.log: "RPM dropped below threshold, shutting down."
+                - switch.turn_on: shutdown_relay
+                - delay: 1000ms
+                - switch.turn_off: shutdown_relay
+                - lambda: 'id(engine_running) = false;'
+# check once a minute to run 30 minute test
+  - interval: 1min
+    then:
+      - lambda: |-
+          if (id(test_running) && (millis() - id(run_test_start_time) >= 3 * 60 * 1000)) {
+            id(test_running) = false;
+            ESP_LOGD("run_test", "Test completed, triggering engine shutdown.");
+            std::string formatted_time = id(current_time).now().strftime("%d-%m-%Y %H:%M");
+            id(last_run_time).publish_state(formatted_time);
+            id(engine_shutdown).execute();
+          }
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (id(ac_monitor_input).state == false && !id(engine_running)) {
+            ESP_LOGD("AC Monitor", "AC Power has been lost for 2 minutes. Starting generator.");
+            std::string formatted_time = id(current_time).now().strftime("%d-%m-%Y %H:%M");
+            id(AC_power_loss_time).publish_state(formatted_time);
+            id(ac_status) = false;
+            id(engine_start).execute();
+
+          } else
+          if (id(ac_monitor_input).state == true && id(engine_running)) {
+            ESP_LOGD("AC Monitor", "AC Power has been restored for 2 minutes. Stopping generator.");
+            std::string formatted_time = id(current_time).now().strftime("%d-%m-%Y %H:%M");
+            id(ac_restore_time).publish_state(formatted_time);
+            id(last_run_time).publish_state(formatted_time);
+            id(ac_status) = true;
+            id(engine_shutdown).execute();
+          }
+
+# Define the buttons to start and stop the engine
+button:
+  - platform: template
+    name: "Start Engine"
+    id: start_engine_button
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: 'return !id(engine_running) && !id(start_blocked);'
+            then:
+              - script.execute: engine_start
+
+  - platform: template
+    name: "Shutdown Engine"
+    id: shutdown_engine_button
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: 'return id(engine_running);'
+            then:
+              - script.execute: engine_shutdown
+
+  - platform: template
+    name: "Engine Run Test"
+    id: run_test_button
+    on_press:
+      then:
+        - script.execute: run_test
